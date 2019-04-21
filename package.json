@@ -2,7 +2,7 @@
     "name": "batchencodingconverter",
     "displayName": "BatchEncodingConverter",
     "description": "convert encoding of files in current workspace.",
-    "version": "0.0.1",
+    "version": "1.0.0",
     "publisher": "yuna611d",
     "engines": {
         "vscode": "^1.33.0"
@@ -43,5 +43,9 @@
     },
     "dependencies": {
         "iconv-lite": "^0.4.24"
+    },
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/yuna611d/BatchEncodingConverter.git"
     }
 }
