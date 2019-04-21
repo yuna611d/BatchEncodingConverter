@@ -65,13 +65,20 @@ export class Service {
         DistFp: string
     }): void {
 
-        console.log(`src: ${fpPair.SrcFp}, dist: ${fpPair.DistFp},
-                     srcEnc: ${this.encodingPair.srcEncoding}, distEnc: ${this.encodingPair.distEncoding}`);
-
-        fs.createReadStream(fpPair.SrcFp)
-            .pipe(iconv.decodeStream(this.encodingPair.srcEncoding))
-            .pipe(iconv.encodeStream(this.encodingPair.distEncoding))
-            .pipe(fs.createWriteStream(fpPair.DistFp));
+        // Check binary or not
+        fs.createReadStream(fpPair.SrcFp, {end: 512})
+        .on('data', data => {
+            if (this.seemsBinary(data)) {
+                throw new Error(`${fpPair.SrcFp} seems binary`);
+            }
+        })
+        .on('close', () => {
+            // Read file -> convert encoding -> write file
+            fs.createReadStream(fpPair.SrcFp)
+                .pipe(iconv.decodeStream(this.encodingPair.srcEncoding))
+                .pipe(iconv.encodeStream(this.encodingPair.distEncoding))
+                .pipe(fs.createWriteStream(fpPair.DistFp));
+        });        
 
     }
 
@@ -87,6 +94,17 @@ export class Service {
         if (!fs.existsSync(outputDir)) {
             fs.mkdirSync(outputDir);
         }
+    }
+
+    private seemsBinary(buffer: Buffer): boolean {
+        const controls = [0,1,2,3,4,5,6,7,8];
+        for (let i = 0; i < 512; i++) {
+            const c = buffer[i];
+            if (controls.indexOf(c) > -1) {
+                return true;
+            }
+        }
+        return false;
     }
 
 }
