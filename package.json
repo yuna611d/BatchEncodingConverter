@@ -11,7 +11,8 @@
         "Other"
     ],
     "activationEvents": [
-        "onCommand:extension.convertSjisToUTF8"
+        "onCommand:extension.convertSjisToUTF8",
+        "onCommand:extension.convertUTF8ToSjis"      
     ],
     "main": "./out/extension",
     "contributes": {
@@ -19,6 +20,10 @@
             {
                 "command": "extension.convertSjisToUTF8",
                 "title": "BatchEncodingConvert: SJIS to UTF8"
+            },
+            {
+                "command": "extension.convertUTF8ToSjis",
+                "title": "BatchEncodingConvert: UTF8 to SJIS"
             }
         ]
     },
@@ -30,10 +35,13 @@
         "test": "npm run compile && node ./node_modules/vscode/bin/test"
     },
     "devDependencies": {
-        "typescript": "^2.6.1",
-        "vscode": "^1.1.6",
+        "@types/mocha": "^2.2.42",
+        "@types/node": "^11.13.6",
         "tslint": "^5.8.0",
-        "@types/node": "^7.0.43",
-        "@types/mocha": "^2.2.42"
+        "typescript": "^3.0.1",
+        "vscode": "^1.1.6"
+    },
+    "dependencies": {
+        "iconv-lite": "^0.4.24"
     }
 }
