@@ -1,6 +1,8 @@
 import { Service, Encoding } from "../Services/Service";
 
 export class ServiceProvider {
+
+
     public provide(pattern: ServiceType): Service {
         if (pattern === ServiceType.SJIStoUTF8) {
             return new Service({srcEncoding: Encoding.Shift_JIS, distEncoding: Encoding.UTF8});

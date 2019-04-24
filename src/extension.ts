@@ -21,16 +21,17 @@ export function activate(context: vscode.ExtensionContext) {
      */
     function disposableAction(command:string, serviceType: ServiceType ,message: {StartMessage?: string, FinishMessage?: string}) {
 
-        return vscode.commands.registerCommand(command, () => { 
+        return vscode.commands.registerCommand(command, async () => { 
             // StartMessage
             showMessage(message.StartMessage);
 
             // Main Action
             const service = new ServiceProvider().provide(serviceType);
-            service.convertEncoding();
-    
+            await service.convertEncoding();
+
             // FinishMessage
             showMessage(message.FinishMessage);
+
         });
     }
 
@@ -43,9 +44,12 @@ export function activate(context: vscode.ExtensionContext) {
             vscode.window.showInformationMessage(message);
         }
     }
+
+    
 }
 
 // this method is called when your extension is deactivated
 export function deactivate() {
 }
+
 
