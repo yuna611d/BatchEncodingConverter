@@ -6,29 +6,21 @@ import * as iconv from 'iconv-lite';
 
 export class Service {
 
-    protected encodingPair: {
-        srcEncoding: Encoding,
-        distEncoding: Encoding
-    };
+    protected encodingPair: {srcEncoding: Encoding, distEncoding: Encoding};
 
-    constructor(encodingPair: {
-        srcEncoding: Encoding,
-        distEncoding: Encoding
-    }) {
+    constructor(encodingPair: {srcEncoding: Encoding, distEncoding: Encoding}) {
         this.encodingPair = encodingPair;
     }
 
-    public convertEncoding(fpPair ? : {
-        SrcFp: string,
-        DistFp: string
-    }) {
+    public async convertEncoding(fpPair ? : {SrcFp: string, DistFp: string}) {
         if (fpPair) {
-            this.convertEncodingForOneFile(fpPair);
+            await this.convertEncodingForOneFile(fpPair);
+        } else {
+            this.convertEncodingForAllFiles();
         }
-        this.convertEncodingForAllFiles();
     }
 
-    protected convertEncodingForAllFiles() {
+    protected async convertEncodingForAllFiles() {
 
         // Determine Base and output Directory
         const baseDir = this.getBaseDir();
@@ -37,44 +29,35 @@ export class Service {
         this.createOutputDir(outputDir);
 
         // Seek files
-        fs.readdir(baseDir, (err, files) => {
-            if (err) {
-                return;
-            }
-
-            // Get filePath -> filter files -> convert encoding            
-            files.map(file => {
-                    return {
-                        SrcFp: path.join(baseDir, file),
-                        DistFp: path.join(outputDir, file)
-                    };
-                })
-                .filter(fpPair => {
-                    return fs.statSync(fpPair.SrcFp).isFile();
-                })
-                .map(fpPair => {
-                    return this.convertEncoding(fpPair);
-                });
+        const files = fs.readdirSync(baseDir);
+        // Get filePath -> filter files -> convert encoding            
+        const fpPairs = files.map(file => {
+            return {
+                SrcFp: path.join(baseDir, file),
+                DistFp: path.join(outputDir, file)
+            };
+        })
+        .filter(fpPair => {
+            return fs.statSync(fpPair.SrcFp).isFile();
         });
-
-
+        
+        await Promise.all(fpPairs.map(async fpPair => {
+            return await this.convertEncoding(fpPair);
+        }));
     }
 
-    protected convertEncodingForOneFile(fpPair: {
-        SrcFp: string,
-        DistFp: string
-    }): void {
+    protected async convertEncodingForOneFile(fpPair: {SrcFp: string, DistFp: string}) {
 
         // Check binary or not
-        fs.createReadStream(fpPair.SrcFp, {end: 512})
+        await fs.createReadStream(fpPair.SrcFp, {end: 512})
         .on('data', data => {
             if (this.seemsBinary(data)) {
                 throw new Error(`${fpPair.SrcFp} seems binary`);
             }
         })
-        .on('close', () => {
+        .on('close', async() => {
             // Read file -> convert encoding -> write file
-            fs.createReadStream(fpPair.SrcFp)
+            await fs.createReadStream(fpPair.SrcFp)
                 .pipe(iconv.decodeStream(this.encodingPair.srcEncoding))
                 .pipe(iconv.encodeStream(this.encodingPair.distEncoding))
                 .pipe(fs.createWriteStream(fpPair.DistFp));
