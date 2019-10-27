@@ -2,6 +2,10 @@
 
 All notable changes to the "batchencodingconverter" extension will be documented in this file.
 
+## v1.0.3
+
+- Resolve some dependency
+
 ## v1.0.2
 
 - Some bugs are fixed

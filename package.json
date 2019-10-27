@@ -2,7 +2,7 @@
     "name": "batchencodingconverter",
     "displayName": "BatchEncodingConverter",
     "description": "convert encoding of files in current workspace.",
-    "version": "1.0.2",
+    "version": "1.0.3",
     "publisher": "yuna611d",
     "engines": {
         "vscode": "^1.33.0"
@@ -12,7 +12,7 @@
     ],
     "activationEvents": [
         "onCommand:extension.convertSjisToUTF8",
-        "onCommand:extension.convertUTF8ToSjis"      
+        "onCommand:extension.convertUTF8ToSjis"
     ],
     "main": "./out/extension",
     "contributes": {
