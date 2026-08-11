@@ -2,6 +2,13 @@
 
 All notable changes to the "batchencodingconverter" extension will be documented in this file.
 
+## Unreleased
+
+- Wait for conversion to actually finish before reporting success
+- Skip binary files without raising an uncaught exception
+- Report read/write failures instead of crashing the extension host
+- Limit how many files are converted in parallel
+
 ## v1.0.3
 
 - Resolve some dependency
