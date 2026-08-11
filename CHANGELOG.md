@@ -8,6 +8,9 @@ All notable changes to the "batchencodingconverter" extension will be documented
 - Skip binary files without raising an uncaught exception
 - Report read/write failures instead of crashing the extension host
 - Limit how many files are converted in parallel
+- Replace the deprecated `vscode` package with `@types/vscode` and `@vscode/test-electron`
+- Replace tslint with eslint, and add `lint` / `test` npm scripts
+- Add unit tests covering the conversion logic
 
 ## v1.0.3
 

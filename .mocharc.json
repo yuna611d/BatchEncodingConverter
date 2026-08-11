@@ -1,0 +1,6 @@
+{
+    "ui": "tdd",
+    "spec": ["out/test/unit/**/*.test.js"],
+    "require": ["./out/test/unit/vscodeStub.js"],
+    "timeout": 20000
+}

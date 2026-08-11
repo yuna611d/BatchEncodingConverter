@@ -4,6 +4,7 @@ out/test/**
 out/**/*.map
 src/**
 .gitignore
+.mocharc.json
 tsconfig.json
 vsc-extension-quickstart.md
-tslint.json
+eslint.config.mjs
