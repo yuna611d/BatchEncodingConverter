@@ -8,7 +8,7 @@ import * as iconv from 'iconv-lite';
 import { setWorkspace } from './vscodeStub';
 import {
     Service, EncodingTransform, EncodingSpec, EncodingPair, FilePathPair, ConversionSummary,
-    ENCODINGS, findEncoding, targetsFor
+    ENCODINGS, findEncoding, targetsFor, isOutputDirectoryName, DEFAULT_EXCLUDE_DIRECTORIES
 } from '../../Services/Service';
 
 function spec(id: string): EncodingSpec {
@@ -267,6 +267,123 @@ suite('Service', () => {
             const out = await new Service(pair(SJIS, UTF8)).convertEncoding();
 
             assert.strictEqual(outputText(out, 'a.txt', UTF8), 'あたらしい');
+        });
+    });
+
+
+    suite('sub directories', () => {
+
+        /** Every file under dir, relative to it, with forward slashes. */
+        function tree(dir: string): string[] {
+            const found: string[] = [];
+            const walk = (current: string) => {
+                for (const entry of fs.readdirSync(current).sort()) {
+                    const full = path.join(current, entry);
+                    if (fs.statSync(full).isDirectory()) {
+                        walk(full);
+                    } else {
+                        found.push(path.relative(dir, full).split(path.sep).join('/'));
+                    }
+                }
+            };
+            walk(dir);
+            return found;
+        }
+
+        function writeTree(): void {
+            write('top.txt', encodeAs(SJIS, 'てっぺん'));
+            write(path.join('a', 'one.txt'), encodeAs(SJIS, 'いち'));
+            write(path.join('a', 'b', 'two.txt'), encodeAs(SJIS, 'に'));
+            write(path.join('a', 'b', 'c', 'three.txt'), encodeAs(SJIS, 'さん'));
+        }
+
+        test('converts only the top level by default', async () => {
+            writeTree();
+
+            const out = await new Service(pair(SJIS, UTF8)).convertEncoding();
+
+            assert.deepStrictEqual(tree(out.outputDir), ['top.txt']);
+            assert.strictEqual(out.converted, 1);
+        });
+
+        test('mirrors the tree when recursive', async () => {
+            writeTree();
+
+            const out = await new Service(pair(SJIS, UTF8), {recursive: true}).convertEncoding();
+
+            assert.deepStrictEqual(tree(out.outputDir), [
+                'a/b/c/three.txt', 'a/b/two.txt', 'a/one.txt', 'top.txt'
+            ].sort());
+            assert.strictEqual(out.converted, 4);
+            assert.strictEqual(outputText(out, path.join('a', 'b', 'c', 'three.txt'), UTF8), 'さん');
+        });
+
+        test('names files by their path, not an ambiguous base name', async () => {
+            write(path.join('a', 'same.txt'), encodeAs(UTF8, 'ふつう'));
+            write(path.join('b', 'same.txt'), encodeAs(UTF8, '絵文字😀'));
+
+            const out = await new Service(pair(UTF8, SJIS), {recursive: true}).convertEncoding();
+
+            assert.deepStrictEqual(out.lossy, [path.join('b', 'same.txt')]);
+            assert.strictEqual(out.converted, 2);
+        });
+
+        test('skips hidden directories and the configured names', async () => {
+            write('keep.txt', encodeAs(SJIS, 'のこす'));
+            write(path.join('.git', 'config'), encodeAs(SJIS, 'せってい'));
+            write(path.join('node_modules', 'pkg', 'index.js'), encodeAs(SJIS, 'いぞん'));
+            write(path.join('vendor', 'lib.txt'), encodeAs(SJIS, 'べんだ'));
+
+            const out = await new Service(pair(SJIS, UTF8), {
+                recursive: true,
+                excludeDirectories: DEFAULT_EXCLUDE_DIRECTORIES.concat(['vendor'])
+            }).convertEncoding();
+
+            assert.deepStrictEqual(tree(out.outputDir), ['keep.txt']);
+        });
+
+        test('descends into a directory once it is off the exclude list', async () => {
+            write(path.join('vendor', 'lib.txt'), encodeAs(SJIS, 'べんだ'));
+
+            const out = await new Service(pair(SJIS, UTF8), {
+                recursive: true, excludeDirectories: []
+            }).convertEncoding();
+
+            assert.deepStrictEqual(tree(out.outputDir), ['vendor/lib.txt']);
+        });
+
+        test('never descends into its own output directories', async () => {
+            write('a.txt', encodeAs(SJIS, 'もと'));
+            // Left over from an earlier run in the other direction.
+            write(path.join('_Shift_JIS', 'old.txt'), encodeAs(SJIS, 'ふるい'));
+
+            const out = await new Service(pair(SJIS, UTF8), {
+                recursive: true, excludeDirectories: []
+            }).convertEncoding();
+
+            assert.deepStrictEqual(tree(out.outputDir), ['a.txt']);
+            assert.ok(isOutputDirectoryName('_Shift_JIS'));
+            assert.ok(!isOutputDirectoryName('_Whatever'));
+        });
+
+        test('does not follow a directory symlink that loops back', async () => {
+            write(path.join('a', 'one.txt'), encodeAs(SJIS, 'いち'));
+            // A link to an ancestor: following it would recurse until the depth cap.
+            fs.symlinkSync(workspace, path.join(workspace, 'a', 'loop'), 'dir');
+
+            const out = await new Service(pair(SJIS, UTF8), {recursive: true}).convertEncoding();
+
+            assert.deepStrictEqual(tree(out.outputDir), ['a/one.txt']);
+            assert.deepStrictEqual(out.failed, []);
+        });
+
+        test('still converts a file reached through a symlink', async () => {
+            write('real.txt', encodeAs(SJIS, 'じつたい'));
+            fs.symlinkSync(path.join(workspace, 'real.txt'), path.join(workspace, 'link.txt'));
+
+            const out = await new Service(pair(SJIS, UTF8), {recursive: true}).convertEncoding();
+
+            assert.deepStrictEqual(tree(out.outputDir).sort(), ['link.txt', 'real.txt']);
         });
     });
 

@@ -35,6 +35,8 @@ interface StubState {
     warning: string[];
     error: string[];
     commands: Map<string, CommandHandler>;
+    /** Values returned by workspace.getConfiguration(...).get(key), by 'section.key'. */
+    configuration: Map<string, unknown>;
 }
 
 const state: StubState = {
@@ -45,7 +47,8 @@ const state: StubState = {
     info: [],
     warning: [],
     error: [],
-    commands: new Map<string, CommandHandler>()
+    commands: new Map<string, CommandHandler>(),
+    configuration: new Map<string, unknown>()
 };
 
 /** Point the stubbed workspace at `fsPath`, or pass undefined for "no workspace open". */
@@ -62,11 +65,17 @@ export function resetStub(): void {
     state.warning = [];
     state.error = [];
     state.commands.clear();
+    state.configuration.clear();
 }
 
 /** Queue the labels the next quick picks resolve to. `undefined` dismisses one. */
 export function answerQuickPicks(...answers: Array<string | undefined>): void {
     state.quickPickAnswers = answers;
+}
+
+/** Make workspace.getConfiguration(section).get(key) return `value`. */
+export function setConfiguration(section: string, key: string, value: unknown): void {
+    state.configuration.set(section + '.' + key, value);
 }
 
 export function quickPickPrompts(): string[] {
@@ -93,6 +102,13 @@ const fakeVscode = {
     workspace: {
         get workspaceFolders(): WorkspaceFolderStub[] | undefined {
             return state.workspaceFolders;
+        },
+        getConfiguration(section: string) {
+            return {
+                get<T>(key: string): T | undefined {
+                    return state.configuration.get(section + '.' + key) as T | undefined;
+                }
+            };
         }
     },
     window: {

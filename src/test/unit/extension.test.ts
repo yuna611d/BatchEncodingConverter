@@ -7,13 +7,15 @@ import * as iconv from 'iconv-lite';
 import * as vscode from 'vscode';
 // Imported before the extension so the `vscode` stub is registered first.
 import {
-    setWorkspace, resetStub, answerQuickPicks,
+    setWorkspace, resetStub, answerQuickPicks, setConfiguration,
     quickPickPrompts, quickPickChoices, shownMessages,
     registeredCommand, registeredCommandIds
 } from './vscodeStub';
 import { activate } from '../../extension';
 
 const COMMAND_ID = 'extension.convertEncoding';
+const DIRECT = 'Only files directly in the workspace folder';
+const RECURSIVE = 'Include sub directories';
 
 suite('extension', () => {
 
@@ -51,12 +53,12 @@ suite('extension', () => {
 
     test('asks for the source first, then a target that excludes it', async () => {
         write('a.txt', 'あいうえお', 'Shift_JIS');
-        answerQuickPicks('Shift_JIS', 'UTF-8');
+        answerQuickPicks('Shift_JIS', 'UTF-8', DIRECT);
 
         await invoke();
 
         const choices = quickPickChoices();
-        assert.strictEqual(choices.length, 2, 'expected a source picker and a target picker');
+        assert.strictEqual(choices.length, 3, 'expected source, target and scope pickers');
         assert.deepStrictEqual(choices[0], [
             'Shift_JIS', 'EUC-JP', 'UTF-8', 'UTF-8 with BOM', 'UTF-16 LE (with BOM)', 'UTF-16 BE (with BOM)'
         ]);
@@ -67,7 +69,7 @@ suite('extension', () => {
 
     test('converts and reports success', async () => {
         write('a.txt', 'あいうえお', 'Shift_JIS');
-        answerQuickPicks('Shift_JIS', 'UTF-8');
+        answerQuickPicks('Shift_JIS', 'UTF-8', DIRECT);
 
         await invoke();
 
@@ -80,7 +82,7 @@ suite('extension', () => {
 
     test('warns rather than reporting plain success when characters are lost', async () => {
         write('emoji.txt', 'メール😀です', 'UTF-8');
-        answerQuickPicks('UTF-8', 'Shift_JIS');
+        answerQuickPicks('UTF-8', 'Shift_JIS', DIRECT);
 
         await invoke();
 
@@ -110,9 +112,53 @@ suite('extension', () => {
         assert.deepStrictEqual(fs.readdirSync(workspace), ['a.txt'], 'nothing should have been written');
     });
 
+    test('asks how far to walk after the encodings', async () => {
+        write('a.txt', 'あいうえお', 'Shift_JIS');
+        answerQuickPicks('Shift_JIS', 'UTF-8', DIRECT);
+
+        await invoke();
+
+        assert.deepStrictEqual(quickPickChoices()[2], [DIRECT, RECURSIVE]);
+    });
+
+    test('does nothing when the scope picker is dismissed', async () => {
+        write('a.txt', 'あいうえお', 'Shift_JIS');
+        answerQuickPicks('Shift_JIS', 'UTF-8', undefined);
+
+        await invoke();
+
+        assert.deepStrictEqual(shownMessages(), {info: [], warning: [], error: []});
+        assert.deepStrictEqual(fs.readdirSync(workspace), ['a.txt'], 'nothing should have been written');
+    });
+
+    test('converts sub directories when the recursive scope is chosen', async () => {
+        write('top.txt', 'てっぺん', 'Shift_JIS');
+        fs.mkdirSync(path.join(workspace, 'sub'));
+        fs.writeFileSync(path.join(workspace, 'sub', 'deep.txt'), iconv.encode('おく', 'Shift_JIS'));
+        answerQuickPicks('Shift_JIS', 'UTF-8', RECURSIVE);
+
+        await invoke();
+
+        const written = fs.readFileSync(path.join(workspace, '_UTF-8', 'sub', 'deep.txt'), 'utf8');
+        assert.strictEqual(written, 'おく');
+        assert.ok(shownMessages().info[0].indexOf('Saved 2 file(s)') > -1);
+    });
+
+    test('honours the configured exclude list', async () => {
+        write('keep.txt', 'のこす', 'Shift_JIS');
+        fs.mkdirSync(path.join(workspace, 'vendor'));
+        fs.writeFileSync(path.join(workspace, 'vendor', 'lib.txt'), iconv.encode('べんだ', 'Shift_JIS'));
+        setConfiguration('batchEncodingConverter', 'excludeDirectories', ['vendor']);
+        answerQuickPicks('Shift_JIS', 'UTF-8', RECURSIVE);
+
+        await invoke();
+
+        assert.deepStrictEqual(fs.readdirSync(path.join(workspace, '_UTF-8')), ['keep.txt']);
+    });
+
     test('surfaces a missing workspace as an error message', async () => {
         setWorkspace(undefined);
-        answerQuickPicks('Shift_JIS', 'UTF-8');
+        answerQuickPicks('Shift_JIS', 'UTF-8', DIRECT);
 
         await invoke();
 

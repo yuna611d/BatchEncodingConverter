@@ -52,6 +52,31 @@ export function targetsFor(source: EncodingSpec): EncodingSpec[] {
     return ENCODINGS.filter(spec => spec.id !== source.id);
 }
 
+/** How a run walks the workspace. */
+export interface ConversionOptions {
+    /** Descend into sub directories, mirroring the tree under the output directory. */
+    recursive: boolean;
+    /** Directory names skipped while descending. */
+    excludeDirectories: string[];
+}
+
+/**
+ * Directories skipped unless the user says otherwise. Recursing into a checkout
+ * without these turns a handful of source files into thousands of dependency and
+ * repository-internal ones.
+ */
+export const DEFAULT_EXCLUDE_DIRECTORIES: string[] = ['node_modules'];
+
+export const DEFAULT_OPTIONS: ConversionOptions = {
+    recursive: false,
+    excludeDirectories: DEFAULT_EXCLUDE_DIRECTORIES
+};
+
+/** True for the `_<encoding>` directories this extension writes its own output to. */
+export function isOutputDirectoryName(name: string): boolean {
+    return ENCODINGS.some(spec => '_' + spec.id === name);
+}
+
 export interface EncodingPair {
     srcEncoding: EncodingSpec;
     distEncoding: EncodingSpec;
@@ -153,10 +178,20 @@ export class Service {
     /** Characters dropped from the end of a sniff, where a truncated sequence would decode as garbage. */
     private static readonly TRUNCATION_GUARD = 2;
 
-    protected encodingPair: EncodingPair;
+    /** Safety net against pathological trees; real projects nest nowhere near this deep. */
+    private static readonly MAX_DEPTH = 32;
 
-    constructor(encodingPair: EncodingPair) {
+    protected encodingPair: EncodingPair;
+    protected options: ConversionOptions;
+
+    constructor(encodingPair: EncodingPair, options?: Partial<ConversionOptions>) {
         this.encodingPair = encodingPair;
+        this.options = {
+            recursive: options && options.recursive !== undefined ? options.recursive : DEFAULT_OPTIONS.recursive,
+            excludeDirectories: options && options.excludeDirectories !== undefined
+                ? options.excludeDirectories
+                : DEFAULT_OPTIONS.excludeDirectories
+        };
     }
 
     /**
@@ -173,10 +208,14 @@ export class Service {
         this.createOutputDir(outputDir);
 
         const fpPairs = await this.collectTargets(baseDir, outputDir);
+        // Mirrored sub directories must exist before any worker opens a write stream;
+        // doing it up front once also keeps concurrent workers from racing each other.
+        fpPairs.forEach(fpPair => this.ensureDirectory(path.dirname(fpPair.DistFp)));
 
         const summary: ConversionSummary = {outputDir: outputDir, converted: 0, skipped: [], lossy: [], failed: []};
         await this.forEachLimited(fpPairs, Service.MAX_CONCURRENCY, async fpPair => {
-            const name = path.basename(fpPair.SrcFp);
+            // Relative, not just the file name: sub directories make base names ambiguous.
+            const name = path.relative(baseDir, fpPair.SrcFp);
             try {
                 if (await this.seemsBinary(fpPair.SrcFp)) {
                     summary.skipped.push(name);
@@ -195,23 +234,69 @@ export class Service {
         return summary;
     }
 
-    /** Seek files directly under baseDir and pair them with their destination path. */
+    /**
+     * Seek files to convert and pair them with their destination path. With
+     * `recursive` the workspace tree is mirrored under the output directory.
+     */
     protected async collectTargets(baseDir: string, outputDir: string): Promise<FilePathPair[]> {
-        const entries = await this.readDir(baseDir);
         const fpPairs: FilePathPair[] = [];
+        await this.collectFrom(baseDir, baseDir, outputDir, fpPairs, 0);
+        return fpPairs;
+    }
+
+    private async collectFrom(dir: string, baseDir: string, outputDir: string, found: FilePathPair[], depth: number): Promise<void> {
+        if (depth > Service.MAX_DEPTH) {
+            return;
+        }
+        const entries = await this.readDir(dir);
         for (const entry of entries) {
-            const srcFp = path.join(baseDir, entry);
+            const srcFp = path.join(dir, entry);
             if (srcFp === outputDir) {
                 continue;
             }
             // Entries we cannot stat (dangling symlinks, races) are simply not convertible.
-            const stats = await this.tryStat(srcFp);
-            if (stats === undefined || !stats.isFile()) {
+            const kind = await this.describeEntry(srcFp);
+            if (kind === undefined) {
                 continue;
             }
-            fpPairs.push({SrcFp: srcFp, DistFp: path.join(outputDir, entry)});
+            if (kind.isDirectory) {
+                if (this.options.recursive && !this.skipsDirectory(entry, kind.isSymlink)) {
+                    await this.collectFrom(srcFp, baseDir, outputDir, found, depth + 1);
+                }
+                continue;
+            }
+            if (!kind.isFile) {
+                continue;
+            }
+            found.push({SrcFp: srcFp, DistFp: path.join(outputDir, path.relative(baseDir, srcFp))});
         }
-        return fpPairs;
+    }
+
+    /**
+     * Directories left alone while descending: the extension's own output, anything
+     * hidden, the configured names, and symlinks — following those can loop forever.
+     */
+    private skipsDirectory(name: string, isSymlink: boolean): boolean {
+        return isSymlink
+            || name.charAt(0) === '.'
+            || isOutputDirectoryName(name)
+            || this.options.excludeDirectories.indexOf(name) > -1;
+    }
+
+    /** Classify an entry, resolving symlinks but remembering that it was one. */
+    private async describeEntry(fp: string): Promise<{isDirectory: boolean, isFile: boolean, isSymlink: boolean} | undefined> {
+        const link = await this.tryLstat(fp);
+        if (link === undefined) {
+            return undefined;
+        }
+        if (!link.isSymbolicLink()) {
+            return {isDirectory: link.isDirectory(), isFile: link.isFile(), isSymlink: false};
+        }
+        const target = await this.tryStat(fp);
+        if (target === undefined) {
+            return undefined;
+        }
+        return {isDirectory: target.isDirectory(), isFile: target.isFile(), isSymlink: true};
     }
 
     /**
@@ -248,9 +333,23 @@ export class Service {
     }
 
     private createOutputDir(outputDir: string) {
-        if (!fs.existsSync(outputDir)) {
-            fs.mkdirSync(outputDir);
+        this.ensureDirectory(outputDir);
+    }
+
+    /**
+     * Create a directory and any missing parents. Hand-rolled because
+     * `fs.mkdirSync`'s `recursive` option only arrived in Node 10.12, later than
+     * the Node the oldest supported VS Code ships.
+     */
+    private ensureDirectory(dir: string) {
+        if (fs.existsSync(dir)) {
+            return;
         }
+        const parent = path.dirname(dir);
+        if (parent !== dir) {
+            this.ensureDirectory(parent);
+        }
+        fs.mkdirSync(dir);
     }
 
     /**
@@ -315,6 +414,14 @@ export class Service {
                     return;
                 }
                 resolve(entries);
+            });
+        });
+    }
+
+    private tryLstat(fp: string): Promise<fs.Stats | undefined> {
+        return new Promise<fs.Stats | undefined>(resolve => {
+            fs.lstat(fp, (error, stats) => {
+                resolve(error ? undefined : stats);
             });
         });
     }
