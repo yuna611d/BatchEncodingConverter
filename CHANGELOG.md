@@ -2,6 +2,22 @@
 
 All notable changes to the "batchencodingconverter" extension will be documented in this file.
 
+## v1.2.0
+
+### Added
+
+- The command now asks whether to convert only the files directly in the workspace
+  folder or to include sub directories. Sub directories are mirrored under the
+  output directory.
+- `batchEncodingConverter.excludeDirectories` setting, defaulting to `["node_modules"]`.
+  Hidden directories, the extension's own `_<encoding>` output directories and
+  directory symlinks are always skipped.
+
+### Changed
+
+- The completion message names files by their path relative to the workspace folder
+  rather than by base name, which was ambiguous once sub directories were involved.
+
 ## v1.1.0
 
 ### Added

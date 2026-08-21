@@ -2,7 +2,7 @@
     "name": "batchencodingconverter",
     "displayName": "BatchEncodingConverter",
     "description": "convert encoding of files in current workspace.",
-    "version": "1.1.0",
+    "version": "1.2.0",
     "publisher": "yuna611d",
     "engines": {
         "vscode": "^1.33.0"
@@ -20,7 +20,22 @@
                 "command": "extension.convertEncoding",
                 "title": "BatchEncodingConvert: Convert Files Encoding"
             }
-        ]
+        ],
+        "configuration": {
+            "title": "BatchEncodingConverter",
+            "properties": {
+                "batchEncodingConverter.excludeDirectories": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    },
+                    "default": [
+                        "node_modules"
+                    ],
+                    "description": "Directory names skipped when converting sub directories. Hidden directories (names starting with a dot) and the extension’s own _<encoding> output directories are always skipped, whatever this is set to."
+                }
+            }
+        }
     },
     "scripts": {
         "vscode:prepublish": "npm run compile",

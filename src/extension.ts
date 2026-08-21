@@ -1,6 +1,19 @@
 'use strict';
 import * as vscode from 'vscode';
-import { Service, ConversionSummary, EncodingSpec, ENCODINGS, targetsFor } from './Services/Service';
+import {
+    Service, ConversionSummary, EncodingSpec, ENCODINGS, targetsFor,
+    DEFAULT_EXCLUDE_DIRECTORIES
+} from './Services/Service';
+
+interface Scope {
+    label: string;
+    recursive: boolean;
+}
+
+const SCOPES: Scope[] = [
+    {label: 'Only files directly in the workspace folder', recursive: false},
+    {label: 'Include sub directories', recursive: true},
+];
 
 export function activate(context: vscode.ExtensionContext) {
 
@@ -21,9 +34,16 @@ export function activate(context: vscode.ExtensionContext) {
         if (!target) {
             return;
         }
+        const scope = await pickScope();
+        if (!scope) {
+            return;
+        }
 
         try {
-            const service = new Service({srcEncoding: source, distEncoding: target});
+            const service = new Service({srcEncoding: source, distEncoding: target}, {
+                recursive: scope.recursive,
+                excludeDirectories: excludeDirectories()
+            });
             const summary = await service.convertEncoding();
             report(summary, target);
         } catch (e) {
@@ -43,6 +63,26 @@ export function activate(context: vscode.ExtensionContext) {
             {placeHolder: placeHolder}
         );
         return picked ? picked.spec : undefined;
+    }
+
+    /** Ask how far to walk, or return undefined if dismissed. */
+    async function pickScope(): Promise<Scope | undefined> {
+        const picked = await vscode.window.showQuickPick(
+            SCOPES.map(scope => ({label: scope.label, scope: scope})),
+            {placeHolder: 'Which files should be converted?'}
+        );
+        return picked ? picked.scope : undefined;
+    }
+
+    /**
+     * Directory names the user wants left alone. Hidden directories and the
+     * extension's own output are always skipped, whatever this returns.
+     */
+    function excludeDirectories(): string[] {
+        const configured = vscode.workspace
+            .getConfiguration('batchEncodingConverter')
+            .get<string[]>('excludeDirectories');
+        return configured === undefined ? DEFAULT_EXCLUDE_DIRECTORIES : configured;
     }
 
     /**

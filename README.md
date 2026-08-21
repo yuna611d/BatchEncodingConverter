@@ -6,9 +6,10 @@ This extension converts the encoding of files in a current workspace.
 
 * **BatchEncodingConvert: Convert Files Encoding**
 
-  Pick the encoding to convert *from*, then the encoding to convert *to*. The
-  converted files are written to a `_<encoding>` directory inside the workspace
-  (for example `_UTF-8`), leaving the originals untouched.
+  Pick the encoding to convert *from*, then the encoding to convert *to*, then
+  whether to include sub directories. The converted files are written to a
+  `_<encoding>` directory inside the workspace (for example `_UTF-8`), leaving
+  the originals untouched.
 
 ## Supported encodings
 
@@ -26,7 +27,10 @@ from the single command. A BOM on the source file is removed during conversion.
 
 ## Notes
 
-* Only files directly under the first workspace folder are converted. Sub directories are not traversed.
+* The command asks whether to convert only the files directly in the workspace
+  folder, or to include sub directories. Sub directories are mirrored under the
+  output directory, so `src/util/a.txt` becomes `_UTF-8/src/util/a.txt`.
+* Only the first workspace folder is used in a multi-root workspace.
 * Files that look binary are skipped. A file is judged by decoding its first 512
   bytes with the source encoding, so UTF-16 text is not mistaken for binary.
 * Existing files in the output directory are overwritten.
@@ -34,7 +38,20 @@ from the single command. A BOM on the source file is removed during conversion.
   converted to Shift_JIS), the character becomes `?` and the file is listed in a
   warning rather than being reported as a clean success.
 * When the run finishes, a message reports how many files were converted,
-  skipped, lost characters and failed.
+  skipped, lost characters and failed. Files are named by their path relative to
+  the workspace folder, so two `index.txt` in different directories stay apart.
+
+## Settings
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `batchEncodingConverter.excludeDirectories` | `["node_modules"]` | Directory names skipped when converting sub directories. |
+
+Three kinds of directory are always skipped while descending, whatever the setting says:
+
+* hidden directories, whose name starts with a dot (`.git`, `.vscode`, …)
+* the extension's own `_<encoding>` output directories, so a run never eats the output of an earlier one
+* symbolic links to directories, which could otherwise loop forever
 
 ## Development
 
