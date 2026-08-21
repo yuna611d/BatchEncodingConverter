@@ -1,23 +1,40 @@
 # README
 
-This extension convert encoding of files in a current workspace.
+This extension converts the encoding of files in a current workspace.
 
-## Commands
+## Command
 
-* BatchEncodingConvert: SJIS to UTF8
+* **BatchEncodingConvert: Convert Files Encoding**
 
-  * Convert file encoding from ShiftJIS to UTF-8; And output converted files in a `_UTF-8` directory
+  Pick the encoding to convert *from*, then the encoding to convert *to*. The
+  converted files are written to a `_<encoding>` directory inside the workspace
+  (for example `_UTF-8`), leaving the originals untouched.
 
-* BatchEncodingConvert: UTF8 to SJIS
+## Supported encodings
 
-  * Convert file encoding from UTF-8 to ShiftJIS; And output converted files in a `_Shift_JIS` directory
+| Encoding | Notes |
+| --- | --- |
+| Shift_JIS | |
+| EUC-JP | |
+| UTF-8 | No BOM |
+| UTF-8 with BOM | |
+| UTF-16 LE | A BOM is always written, otherwise the byte order is not recoverable |
+| UTF-16 BE | A BOM is always written |
+
+Any encoding can be converted to any other, so all 30 combinations are available
+from the single command. A BOM on the source file is removed during conversion.
 
 ## Notes
 
 * Only files directly under the first workspace folder are converted. Sub directories are not traversed.
-* Files that look binary (a NUL or other low control byte in the first 512 bytes) are skipped.
+* Files that look binary are skipped. A file is judged by decoding its first 512
+  bytes with the source encoding, so UTF-16 text is not mistaken for binary.
 * Existing files in the output directory are overwritten.
-* When the run finishes, a message reports how many files were converted, skipped and failed.
+* If the target encoding cannot represent a character (for example an emoji
+  converted to Shift_JIS), the character becomes `?` and the file is listed in a
+  warning rather than being reported as a clean success.
+* When the run finishes, a message reports how many files were converted,
+  skipped, lost characters and failed.
 
 ## Development
 

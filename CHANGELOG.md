@@ -2,6 +2,22 @@
 
 All notable changes to the "batchencodingconverter" extension will be documented in this file.
 
+## v1.1.0
+
+### Added
+
+- EUC-JP, UTF-8 with BOM, UTF-16 LE and UTF-16 BE, on top of the existing Shift_JIS and UTF-8
+- Any encoding can now be converted to any other; the source and target are chosen from a picker
+- Files that lose characters the target encoding cannot represent are reported instead of silently succeeding
+
+### Changed
+
+- **Breaking:** the commands `extension.convertSjisToUTF8` and `extension.convertUTF8ToSjis`
+  are replaced by a single `extension.convertEncoding`. Keybindings or tasks referring to the
+  old command ids need updating.
+- Binary detection now decodes the leading bytes with the source encoding. The previous
+  raw-byte check treated all UTF-16 text as binary.
+
 ## Unreleased
 
 - Wait for conversion to actually finish before reporting success

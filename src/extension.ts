@@ -1,52 +1,75 @@
 'use strict';
 import * as vscode from 'vscode';
-import { ServiceProvider, ServiceType } from './Providers/ServiceProvider';
-import { ConversionSummary } from './Services/Service';
+import { Service, ConversionSummary, EncodingSpec, ENCODINGS, targetsFor } from './Services/Service';
 
 export function activate(context: vscode.ExtensionContext) {
 
-    // Convert to UTF8
     context.subscriptions.push(
-        disposableAction('extension.convertSjisToUTF8', ServiceType.SJIStoUTF8, 'UTF8')
+        vscode.commands.registerCommand('extension.convertEncoding', convertEncoding)
     );
-    // Convert to SJIS
-    context.subscriptions.push(
-        disposableAction('extension.convertUTF8ToSjis', ServiceType.UTF8toSJIS, 'SJIS')
-    );
-
 
     /**
-     * Return register command, which has main action
-     * @param command command id contributed in package.json
-     * @param serviceType conversion direction to run
-     * @param label human readable name of the target encoding
+     * Ask for the source and target encodings, then convert the workspace.
+     * Dismissing either picker cancels the command without a message.
      */
-    function disposableAction(command: string, serviceType: ServiceType, label: string) {
+    async function convertEncoding() {
+        const source = await pickEncoding('Convert files from which encoding?', ENCODINGS);
+        if (!source) {
+            return;
+        }
+        const target = await pickEncoding(`Convert from ${source.label} to which encoding?`, targetsFor(source));
+        if (!target) {
+            return;
+        }
 
-        return vscode.commands.registerCommand(command, async () => {
-            try {
-                // Main Action
-                const service = new ServiceProvider().provide(serviceType);
-                const summary = await service.convertEncoding();
+        try {
+            const service = new Service({srcEncoding: source, distEncoding: target});
+            const summary = await service.convertEncoding();
+            report(summary, target);
+        } catch (e) {
+            const reason = e instanceof Error ? e.message : String(e);
+            vscode.window.showErrorMessage(`BatchEncodingConvert failed: ${reason}`);
+        }
+    }
 
-                // FinishMessage
-                vscode.window.showInformationMessage(describe(summary, label));
-            } catch (e) {
-                const reason = e instanceof Error ? e.message : String(e);
-                vscode.window.showErrorMessage(`BatchEncodingConvert failed: ${reason}`);
-            }
-        });
+    /**
+     * Show the encodings and return the chosen one, or undefined if dismissed.
+     * @param placeHolder prompt shown above the list
+     * @param choices encodings to offer
+     */
+    async function pickEncoding(placeHolder: string, choices: EncodingSpec[]): Promise<EncodingSpec | undefined> {
+        const picked = await vscode.window.showQuickPick(
+            choices.map(spec => ({label: spec.label, spec: spec})),
+            {placeHolder: placeHolder}
+        );
+        return picked ? picked.spec : undefined;
+    }
+
+    /**
+     * Report the outcome. Losing characters or failing on a file is a warning,
+     * not the plain success the old code always reported.
+     */
+    function report(summary: ConversionSummary, target: EncodingSpec) {
+        const message = describe(summary, target);
+        if (summary.lossy.length > 0 || summary.failed.length > 0) {
+            vscode.window.showWarningMessage(message);
+            return;
+        }
+        vscode.window.showInformationMessage(message);
     }
 
     /**
      * Build the completion message out of what the run actually did.
      * @param summary outcome reported by the service
-     * @param label human readable name of the target encoding
+     * @param target encoding the files were converted to
      */
-    function describe(summary: ConversionSummary, label: string): string {
-        const parts = [`Saved ${summary.converted} file(s) as ${label} in ${summary.outputDir}`];
+    function describe(summary: ConversionSummary, target: EncodingSpec): string {
+        const parts = [`Saved ${summary.converted} file(s) as ${target.label} in ${summary.outputDir}`];
         if (summary.skipped.length > 0) {
             parts.push(`skipped ${summary.skipped.length} binary file(s)`);
+        }
+        if (summary.lossy.length > 0) {
+            parts.push(`${summary.lossy.length} file(s) lost characters ${target.label} cannot represent: ${summary.lossy.join(', ')}`);
         }
         if (summary.failed.length > 0) {
             parts.push(`failed on ${summary.failed.length} file(s): ${summary.failed.map(f => f.file).join(', ')}`);
@@ -54,10 +77,8 @@ export function activate(context: vscode.ExtensionContext) {
         return parts.join('; ');
     }
 
-
 }
 
 // this method is called when your extension is deactivated
 export function deactivate() {
 }
-
