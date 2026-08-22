@@ -3,6 +3,7 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as iconv from 'iconv-lite';
+import * as japanese from 'encoding-japanese';
 import { Transform } from 'stream';
 
 /**
@@ -15,10 +16,17 @@ export interface EncodingSpec {
     id: string;
     /** Shown to the user when picking encodings. */
     label: string;
-    /** Name handed to iconv-lite. */
+    /** Name handed to iconv-lite. Only consulted when `codec` is 'iconv'. */
     iconvName: string;
     /** Whether a BOM is written when this spec is the conversion target. */
     addBOM: boolean;
+    /**
+     * Which library converts this encoding. iconv-lite has never implemented
+     * ISO-2022-JP — it is stateful, and even the current 0.7 release reports
+     * `encodingExists('ISO-2022-JP') === false` — so that one goes through
+     * encoding-japanese instead.
+     */
+    codec: 'iconv' | 'iso-2022-jp';
 }
 
 /**
@@ -30,12 +38,13 @@ export interface EncodingSpec {
  * both sides so the two menus stay symmetric.
  */
 export const ENCODINGS: EncodingSpec[] = [
-    {id: 'Shift_JIS', label: 'Shift_JIS',            iconvName: 'Shift_JIS', addBOM: false},
-    {id: 'EUC-JP',    label: 'EUC-JP',               iconvName: 'EUC-JP',    addBOM: false},
-    {id: 'UTF-8',     label: 'UTF-8',                iconvName: 'UTF-8',     addBOM: false},
-    {id: 'UTF-8-BOM', label: 'UTF-8 with BOM',       iconvName: 'UTF-8',     addBOM: true},
-    {id: 'UTF-16LE',  label: 'UTF-16 LE (with BOM)', iconvName: 'UTF-16LE',  addBOM: true},
-    {id: 'UTF-16BE',  label: 'UTF-16 BE (with BOM)', iconvName: 'UTF-16BE',  addBOM: true},
+    {id: 'Shift_JIS',   label: 'Shift_JIS',            iconvName: 'Shift_JIS', addBOM: false, codec: 'iconv'},
+    {id: 'EUC-JP',      label: 'EUC-JP',               iconvName: 'EUC-JP',    addBOM: false, codec: 'iconv'},
+    {id: 'ISO-2022-JP', label: 'ISO-2022-JP (JIS)',    iconvName: 'ISO-2022-JP', addBOM: false, codec: 'iso-2022-jp'},
+    {id: 'UTF-8',       label: 'UTF-8',                iconvName: 'UTF-8',     addBOM: false, codec: 'iconv'},
+    {id: 'UTF-8-BOM',   label: 'UTF-8 with BOM',       iconvName: 'UTF-8',     addBOM: true,  codec: 'iconv'},
+    {id: 'UTF-16LE',    label: 'UTF-16 LE (with BOM)', iconvName: 'UTF-16LE',  addBOM: true,  codec: 'iconv'},
+    {id: 'UTF-16BE',    label: 'UTF-16 BE (with BOM)', iconvName: 'UTF-16BE',  addBOM: true,  codec: 'iconv'},
 ];
 
 /** Look an encoding up by its stable id. */
@@ -97,6 +106,126 @@ export interface ConversionSummary {
     failed: Array<{file: string, reason: string}>;
 }
 
+const ESCAPE = 0x1B;
+/** The `$` that marks an escape sequence as selecting a two-byte character set. */
+const MULTI_BYTE_INTRODUCER = 0x24;
+/** The `(` that, after `$`, makes the escape sequence four bytes rather than three. */
+const EXTENDED_INTRODUCER = 0x28;
+
+/** Encode text as `spec` stores it. */
+export function encodeText(spec: EncodingSpec, text: string): Buffer {
+    if (spec.codec === 'iso-2022-jp') {
+        return Buffer.from(japanese.convert(japanese.stringToCode(text), {to: 'JIS', from: 'UNICODE'}));
+    }
+    return iconv.encode(text, spec.iconvName, {addBOM: spec.addBOM});
+}
+
+/** Encode a continuation chunk, which must never repeat a BOM. */
+export function encodeContinuation(spec: EncodingSpec, text: string): Buffer {
+    if (spec.codec === 'iso-2022-jp') {
+        return encodeText(spec, text);
+    }
+    return iconv.encode(text, spec.iconvName, {});
+}
+
+/** Decode bytes stored as `spec`. */
+export function decodeBytes(spec: EncodingSpec, bytes: Buffer): string {
+    if (spec.codec === 'iso-2022-jp') {
+        return japanese.codeToString(japanese.convert(bytes, {to: 'UNICODE', from: 'JIS'}));
+    }
+    return iconv.decode(bytes, spec.iconvName);
+}
+
+/** Length of the escape sequence starting at `at`, whether or not it is all present. */
+function escapeLength(buffer: Buffer, at: number): number {
+    return buffer[at + 1] === MULTI_BYTE_INTRODUCER && buffer[at + 2] === EXTENDED_INTRODUCER ? 4 : 3;
+}
+
+function selectsMultiByte(escape: Buffer): boolean {
+    return escape.length > 1 && escape[1] === MULTI_BYTE_INTRODUCER;
+}
+
+/**
+ * How much of `buffer` ends on a character boundary, and which escape sequence is
+ * in effect there. ISO-2022-JP is stateful, so a chunk cannot simply be decoded on
+ * its own: cutting inside a two-byte character or an escape sequence corrupts it,
+ * and a chunk that starts mid-character set has lost the escape that said so.
+ */
+export function splitIso2022Jp(buffer: Buffer, escape: Buffer): {end: number, escape: Buffer} {
+    let at = 0;
+    let current = escape;
+    let multiByte = selectsMultiByte(current);
+    while (at < buffer.length) {
+        if (buffer[at] === ESCAPE) {
+            const length = escapeLength(buffer, at);
+            if (at + length > buffer.length) {
+                break;
+            }
+            current = buffer.slice(at, at + length);
+            multiByte = selectsMultiByte(current);
+            at += length;
+            continue;
+        }
+        const width = multiByte ? 2 : 1;
+        if (at + width > buffer.length) {
+            break;
+        }
+        at += width;
+    }
+    return {end: at, escape: current};
+}
+
+/**
+ * Decodes an ISO-2022-JP byte stream into text, holding back any trailing bytes
+ * that do not yet form a whole character and re-stating the character set at the
+ * start of every slice it hands to the decoder.
+ */
+export class Iso2022JpDecodeStream extends Transform {
+
+    private pending: Buffer = Buffer.alloc(0);
+    /** Escape sequence in effect at the start of `pending`; empty means ASCII. */
+    private escape: Buffer = Buffer.alloc(0);
+
+    constructor() {
+        // Mirrors iconv-lite's decode streams, whose readable side yields strings.
+        super({encoding: 'utf8'});
+    }
+
+    public _transform(chunk: Buffer, _encoding: string, callback: (error?: Error | null) => void) {
+        this.pending = Buffer.concat([this.pending, chunk]);
+        const boundary = splitIso2022Jp(this.pending, this.escape);
+        if (boundary.end === 0) {
+            callback();
+            return;
+        }
+        const complete = Buffer.concat([this.escape, this.pending.slice(0, boundary.end)]);
+        this.pending = this.pending.slice(boundary.end);
+        this.escape = boundary.escape;
+        this.push(japanese.codeToString(japanese.convert(complete, {to: 'UNICODE', from: 'JIS'})), 'utf8');
+        callback();
+    }
+
+    public _flush(callback: (error?: Error | null) => void) {
+        if (this.pending.length === 0) {
+            callback();
+            return;
+        }
+        // Whatever is left is truncated; decode it anyway rather than dropping it.
+        const rest = Buffer.concat([this.escape, this.pending]);
+        this.pending = Buffer.alloc(0);
+        this.push(japanese.codeToString(japanese.convert(rest, {to: 'UNICODE', from: 'JIS'})), 'utf8');
+        callback();
+    }
+}
+
+/** A stream that turns bytes stored as `spec` into text. */
+export function decodeStreamFor(spec: EncodingSpec): NodeJS.ReadWriteStream {
+    if (spec.codec === 'iso-2022-jp') {
+        return new Iso2022JpDecodeStream() as unknown as NodeJS.ReadWriteStream;
+    }
+    return iconv.decodeStream(spec.iconvName);
+}
+
 /**
  * Encodes decoded text and notices when the target encoding cannot represent it.
  *
@@ -149,12 +278,13 @@ export class EncodingTransform extends Transform {
 
     private encodeAndCheck(text: string): Buffer {
         // A BOM belongs to the start of the file, so only the first chunk asks for one.
-        const options = this.atStart ? {addBOM: this.spec.addBOM} : {};
+        const bytes = this.atStart ? encodeText(this.spec, text) : encodeContinuation(this.spec, text);
         this.atStart = false;
 
-        const bytes = iconv.encode(text, this.spec.iconvName, options);
-        // decode() strips the BOM, so its presence never looks like a difference.
-        if (!this.lossy && iconv.decode(bytes, this.spec.iconvName) !== text) {
+        // Decoding strips the BOM, so its presence never looks like a difference.
+        // ISO-2022-JP survives this too: every chunk is encoded starting and ending
+        // in ASCII, so the pieces concatenate into a valid stream.
+        if (!this.lossy && decodeBytes(this.spec, bytes) !== text) {
             this.lossy = true;
         }
         return bytes;
@@ -306,7 +436,7 @@ export class Service {
     protected convertEncodingForOneFile(fpPair: FilePathPair): Promise<boolean> {
         return new Promise<boolean>((resolve, reject) => {
             const source = fs.createReadStream(fpPair.SrcFp);
-            const decoder = iconv.decodeStream(this.encodingPair.srcEncoding.iconvName);
+            const decoder = decodeStreamFor(this.encodingPair.srcEncoding);
             const encoder = new EncodingTransform(this.encodingPair.distEncoding);
             const destination = fs.createWriteStream(fpPair.DistFp);
 
@@ -359,7 +489,7 @@ export class Service {
      */
     private async seemsBinary(filePath: string): Promise<boolean> {
         const head = await this.readHead(filePath, Service.SNIFF_LENGTH);
-        const decoded = iconv.decode(head, this.encodingPair.srcEncoding.iconvName);
+        const decoded = decodeBytes(this.encodingPair.srcEncoding, head);
         return Service.decodesAsBinary(decoded);
     }
 

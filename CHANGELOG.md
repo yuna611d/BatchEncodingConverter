@@ -2,6 +2,20 @@
 
 All notable changes to the "batchencodingconverter" extension will be documented in this file.
 
+## v1.3.0
+
+### Added
+
+- ISO-2022-JP (JIS), as both a source and a target. iconv-lite has never implemented
+  it — even the current 0.7 release reports `encodingExists('ISO-2022-JP') === false`
+  — so this encoding is converted with `encoding-japanese`.
+
+### Fixed
+
+- The round trip tests converted each direction in the same workspace, so the file
+  written for the first direction was silently converted again by the second. Each
+  direction now gets a workspace of its own.
+
 ## v1.2.0
 
 ### Added

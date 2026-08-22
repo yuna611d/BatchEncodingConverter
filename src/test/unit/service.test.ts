@@ -4,11 +4,13 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import * as iconv from 'iconv-lite';
+import * as japanese from 'encoding-japanese';
 // Imported before the service so the `vscode` stub is registered first.
 import { setWorkspace } from './vscodeStub';
 import {
     Service, EncodingTransform, EncodingSpec, EncodingPair, FilePathPair, ConversionSummary,
-    ENCODINGS, findEncoding, targetsFor, isOutputDirectoryName, DEFAULT_EXCLUDE_DIRECTORIES
+    ENCODINGS, findEncoding, targetsFor, isOutputDirectoryName, DEFAULT_EXCLUDE_DIRECTORIES,
+    Iso2022JpDecodeStream, splitIso2022Jp
 } from '../../Services/Service';
 
 function spec(id: string): EncodingSpec {
@@ -24,6 +26,7 @@ const UTF8 = spec('UTF-8');
 const UTF8_BOM = spec('UTF-8-BOM');
 const UTF16LE = spec('UTF-16LE');
 const UTF16BE = spec('UTF-16BE');
+const JIS = spec('ISO-2022-JP');
 
 const JAPANESE = 'こんにちは世界\nABC 123\n';
 
@@ -31,9 +34,24 @@ function pair(src: EncodingSpec, dist: EncodingSpec): EncodingPair {
     return {srcEncoding: src, distEncoding: dist};
 }
 
-/** Bytes for `text` as a file genuinely stored in `target` would hold them. */
+/**
+ * Bytes for `text` as a file genuinely stored in `target` would hold them.
+ * Deliberately calls the libraries directly rather than the service's own
+ * dispatch, so a fixture never agrees with the code under test by construction.
+ */
 function encodeAs(target: EncodingSpec, text: string): Buffer {
+    if (target.id === 'ISO-2022-JP') {
+        return Buffer.from(japanese.convert(japanese.stringToCode(text), {to: 'JIS', from: 'UNICODE'}));
+    }
     return iconv.encode(text, target.iconvName, {addBOM: target.addBOM});
+}
+
+/** Read bytes back as `source` stores them, again straight from the libraries. */
+function decodeAs(source: EncodingSpec, bytes: Buffer): string {
+    if (source.id === 'ISO-2022-JP') {
+        return japanese.codeToString(japanese.convert(bytes, {to: 'UNICODE', from: 'JIS'}));
+    }
+    return iconv.decode(bytes, source.iconvName);
 }
 
 suite('Service', () => {
@@ -41,11 +59,14 @@ suite('Service', () => {
     let workspace: string;
     const created: string[] = [];
 
-    setup(() => {
+    /** Point the stub at a brand new empty workspace. */
+    function freshWorkspace(): void {
         workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'bec-'));
         created.push(workspace);
         setWorkspace(workspace);
-    });
+    }
+
+    setup(freshWorkspace);
 
     suiteTeardown(() => {
         created.forEach(dir => fs.rmSync(dir, {recursive: true, force: true}));
@@ -62,14 +83,16 @@ suite('Service', () => {
     }
 
     function outputText(summary: ConversionSummary, name: string, target: EncodingSpec): string {
-        return iconv.decode(outputBytes(summary, name), target.iconvName);
+        return decodeAs(target, outputBytes(summary, name));
     }
 
     suite('encoding catalogue', () => {
 
         test('offers every encoding as a source', () => {
             const ids = ENCODINGS.map(e => e.id);
-            assert.deepStrictEqual(ids, ['Shift_JIS', 'EUC-JP', 'UTF-8', 'UTF-8-BOM', 'UTF-16LE', 'UTF-16BE']);
+            assert.deepStrictEqual(ids, [
+                'Shift_JIS', 'EUC-JP', 'ISO-2022-JP', 'UTF-8', 'UTF-8-BOM', 'UTF-16LE', 'UTF-16BE'
+            ]);
         });
 
         test('never offers converting an encoding into itself', () => {
@@ -99,8 +122,9 @@ suite('Service', () => {
                 assert.deepStrictEqual(out.lossy, []);
                 assert.strictEqual(outputText(out, 'a.txt', UTF8), JAPANESE);
 
-                // ...and back the other way, comparing the bytes a real file would have.
-                setWorkspace(workspace);
+                // ...and back the other way, in a workspace of its own so the file
+                // written above is not silently converted a second time.
+                freshWorkspace();
                 write('b.txt', encodeAs(UTF8, JAPANESE));
                 const back = await new Service(pair(UTF8, source)).convertEncoding();
                 assert.deepStrictEqual(back.failed, []);
@@ -129,7 +153,8 @@ suite('Service', () => {
             const le = await new Service(pair(UTF8, UTF16LE)).convertEncoding();
             assert.deepStrictEqual(outputBytes(le, 'a.txt').slice(0, 2), Buffer.from([0xFF, 0xFE]));
 
-            setWorkspace(workspace);
+            freshWorkspace();
+            write('a.txt', encodeAs(UTF8, JAPANESE));
             const be = await new Service(pair(UTF8, UTF16BE)).convertEncoding();
             assert.deepStrictEqual(outputBytes(be, 'a.txt').slice(0, 2), Buffer.from([0xFE, 0xFF]));
         });
@@ -146,6 +171,134 @@ suite('Service', () => {
         });
     });
 
+    suite('ISO-2022-JP', () => {
+
+        // Mixes ASCII, kanji, kana and half-width kana, so the byte stream switches
+        // character set several times and exercises every escape sequence involved.
+        const MIXED = 'ABC日本語です\nかな漢字ｶﾅ 123\n';
+
+        /** Push `chunks` through the decode stream and collect the text it yields. */
+        function decodeThroughStream(chunks: Buffer[]): Promise<string> {
+            return new Promise<string>((resolve, reject) => {
+                const stream = new Iso2022JpDecodeStream();
+                let text = '';
+                stream.on('data', (chunk: string) => {
+                    text += chunk;
+                });
+                stream.on('error', reject);
+                stream.on('end', () => resolve(text));
+                chunks.forEach(chunk => stream.write(chunk));
+                stream.end();
+            });
+        }
+
+        test('writes escape sequences and returns to ASCII', async () => {
+            write('a.txt', encodeAs(UTF8, '日本語'));
+
+            const out = await new Service(pair(UTF8, JIS)).convertEncoding();
+            const bytes = outputBytes(out, 'a.txt');
+
+            // ESC $ B selects JIS X 0208, ESC ( B returns to ASCII.
+            assert.deepStrictEqual(bytes.slice(0, 3), Buffer.from([0x1B, 0x24, 0x42]));
+            assert.deepStrictEqual(bytes.slice(-3), Buffer.from([0x1B, 0x28, 0x42]));
+            assert.ok(bytes.every(byte => byte < 0x80), 'ISO-2022-JP is a seven bit encoding');
+        });
+
+        test('decodes the same text however the byte stream is chunked', async () => {
+            const bytes = encodeAs(JIS, MIXED);
+
+            // Every split point, including inside escape sequences and two-byte characters.
+            for (let cut = 0; cut <= bytes.length; cut++) {
+                const text = await decodeThroughStream([bytes.slice(0, cut), bytes.slice(cut)]);
+                assert.strictEqual(text, MIXED, `wrong text when the stream is split at byte ${cut}`);
+            }
+        });
+
+        test('decodes correctly when fed one byte at a time', async () => {
+            const bytes = encodeAs(JIS, MIXED);
+            const chunks: Buffer[] = [];
+            for (let at = 0; at < bytes.length; at++) {
+                chunks.push(bytes.slice(at, at + 1));
+            }
+
+            assert.strictEqual(await decodeThroughStream(chunks), MIXED);
+        });
+
+        test('never reports a boundary inside an escape sequence or a two-byte character', () => {
+            const bytes = encodeAs(JIS, MIXED);
+
+            for (let length = 0; length <= bytes.length; length++) {
+                const head = bytes.slice(0, length);
+                const boundary = splitIso2022Jp(head, Buffer.alloc(0));
+                assert.ok(boundary.end <= length);
+                // Whatever it calls complete must decode to a prefix of the text.
+                const decoded = decodeAs(JIS, head.slice(0, boundary.end));
+                assert.ok(MIXED.indexOf(decoded) === 0, `byte ${length} yielded ${JSON.stringify(decoded)}`);
+            }
+        });
+
+        test('marks a truncated trailing character rather than dropping it', async () => {
+            const bytes = encodeAs(JIS, 'ABC日本語');
+            // Cut the final kanji in half, leaving one byte that cannot form a character.
+            write('cut.txt', bytes.slice(0, bytes.length - 4));
+
+            const out = await new Service(pair(JIS, UTF8)).convertEncoding();
+
+            // The decodable part survives and the dangling byte leaves a visible mark,
+            // rather than the file quietly losing its tail.
+            assert.strictEqual(outputText(out, 'cut.txt', UTF8), 'ABC日本?');
+        });
+
+        test('measures a four byte escape sequence correctly', () => {
+            // ESC $ ( D selects JIS X 0212. encoding-japanese never writes it, but a
+            // file can contain it, and reading it as three bytes would misalign
+            // every character after it.
+            const bytes = Buffer.from([
+                0x41,                          // 'A'
+                0x1B, 0x24, 0x28, 0x44,        // ESC $ ( D
+                0x21, 0x21,                    // one two-byte character
+                0x1B, 0x28, 0x42,              // ESC ( B, back to ASCII
+                0x42                           // 'B'
+            ]);
+
+            const boundary = splitIso2022Jp(bytes, Buffer.alloc(0));
+
+            assert.strictEqual(boundary.end, bytes.length, 'the whole buffer is complete');
+            assert.deepStrictEqual(boundary.escape, Buffer.from([0x1B, 0x28, 0x42]));
+        });
+
+        test('survives a file larger than one stream chunk', async () => {
+            const big = '日本語のテキストABC\n'.repeat(20000);
+            write('big.txt', encodeAs(JIS, big));
+
+            const out = await new Service(pair(JIS, UTF8)).convertEncoding();
+
+            assert.deepStrictEqual(out.failed, []);
+            assert.deepStrictEqual(out.skipped, []);
+            assert.strictEqual(outputText(out, 'big.txt', UTF8), big);
+        });
+
+        test('reports characters JIS cannot represent', async () => {
+            write('emoji.txt', encodeAs(UTF8, 'メール😀です\n'));
+            write('plain.txt', encodeAs(UTF8, 'ふつうの日本語\n'));
+
+            const out = await new Service(pair(UTF8, JIS)).convertEncoding();
+
+            assert.deepStrictEqual(out.lossy, ['emoji.txt']);
+            assert.strictEqual(out.converted, 2);
+        });
+
+        test('still skips binary files', async () => {
+            write('image.png', Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x01, 0x02, 0x03]));
+            write('text.txt', encodeAs(JIS, MIXED));
+
+            const out = await new Service(pair(JIS, UTF8)).convertEncoding();
+
+            assert.deepStrictEqual(out.skipped, ['image.png']);
+            assert.strictEqual(out.converted, 1);
+        });
+    });
+
     suite('byte order marks', () => {
 
         test('adds a BOM for UTF-8-BOM and omits it for UTF-8', async () => {
@@ -154,7 +307,8 @@ suite('Service', () => {
             const withBom = await new Service(pair(SJIS, UTF8_BOM)).convertEncoding();
             assert.deepStrictEqual(outputBytes(withBom, 'a.txt').slice(0, 3), Buffer.from([0xEF, 0xBB, 0xBF]));
 
-            setWorkspace(workspace);
+            freshWorkspace();
+            write('a.txt', encodeAs(SJIS, JAPANESE));
             const without = await new Service(pair(SJIS, UTF8)).convertEncoding();
             assert.notDeepStrictEqual(outputBytes(without, 'a.txt').slice(0, 3), Buffer.from([0xEF, 0xBB, 0xBF]));
         });
@@ -483,7 +637,8 @@ suite('Service', () => {
             assert.deepStrictEqual(toUtf16.lossy, [], 'UTF-16 can represent every character');
             assert.strictEqual(outputText(toUtf16, 'big.txt', UTF16LE), big);
 
-            setWorkspace(workspace);
+            freshWorkspace();
+            write('big.txt', encodeAs(UTF8, big));
             const toSjis = await new Service(pair(UTF8, SJIS)).convertEncoding();
             assert.deepStrictEqual(toSjis.lossy, ['big.txt']);
         });
