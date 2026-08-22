@@ -60,10 +60,11 @@ suite('extension', () => {
         const choices = quickPickChoices();
         assert.strictEqual(choices.length, 3, 'expected source, target and scope pickers');
         assert.deepStrictEqual(choices[0], [
-            'Shift_JIS', 'EUC-JP', 'UTF-8', 'UTF-8 with BOM', 'UTF-16 LE (with BOM)', 'UTF-16 BE (with BOM)'
+            'Shift_JIS', 'EUC-JP', 'ISO-2022-JP (JIS)', 'UTF-8', 'UTF-8 with BOM',
+            'UTF-16 LE (with BOM)', 'UTF-16 BE (with BOM)'
         ]);
         assert.strictEqual(choices[1].indexOf('Shift_JIS'), -1, 'the source was offered as a target');
-        assert.strictEqual(choices[1].length, 5);
+        assert.strictEqual(choices[1].length, 6);
         assert.ok(quickPickPrompts()[1].indexOf('Shift_JIS') > -1, 'the second prompt should name the source');
     });
 

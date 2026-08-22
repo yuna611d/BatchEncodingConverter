@@ -17,12 +17,13 @@ This extension converts the encoding of files in a current workspace.
 | --- | --- |
 | Shift_JIS | |
 | EUC-JP | |
+| ISO-2022-JP (JIS) | Seven bit, stateful; converted with `encoding-japanese` because iconv-lite does not implement it |
 | UTF-8 | No BOM |
 | UTF-8 with BOM | |
 | UTF-16 LE | A BOM is always written, otherwise the byte order is not recoverable |
 | UTF-16 BE | A BOM is always written |
 
-Any encoding can be converted to any other, so all 30 combinations are available
+Any encoding can be converted to any other, so all 42 combinations are available
 from the single command. A BOM on the source file is removed during conversion.
 
 ## Notes

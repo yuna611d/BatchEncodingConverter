@@ -2,7 +2,7 @@
     "name": "batchencodingconverter",
     "displayName": "BatchEncodingConverter",
     "description": "convert encoding of files in current workspace.",
-    "version": "1.2.0",
+    "version": "1.3.0",
     "publisher": "yuna611d",
     "engines": {
         "vscode": "^1.33.0"
@@ -48,6 +48,7 @@
     },
     "devDependencies": {
         "@eslint/js": "^9.39.5",
+        "@types/encoding-japanese": "^2.2.1",
         "@types/mocha": "^10.0.10",
         "@types/node": "^18.19.130",
         "@types/vscode": "~1.33.0",
@@ -58,6 +59,7 @@
         "typescript-eslint": "^8.67.0"
     },
     "dependencies": {
+        "encoding-japanese": "^2.2.0",
         "iconv-lite": "^0.4.24"
     },
     "repository": {
