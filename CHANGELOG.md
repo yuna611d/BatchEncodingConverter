@@ -2,6 +2,18 @@
 
 All notable changes to the "batchencodingconverter" extension will be documented in this file.
 
+## v1.3.1
+
+### Changed
+
+- Marketplace metadata: an icon, a description that names the supported encodings,
+  search keywords, the MIT licence declaration, and issue/homepage links.
+- Declared `extensionKind: ["workspace"]`, so the extension runs next to the files
+  it converts in remote (SSH, WSL, container) workspaces rather than on the UI side.
+- Declared that virtual workspaces are unsupported — conversion goes through the
+  file system — and that untrusted workspaces are, since nothing from the workspace
+  is ever executed.
+
 ## v1.3.0
 
 ### Added

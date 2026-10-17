@@ -1,19 +1,45 @@
 {
     "name": "batchencodingconverter",
     "displayName": "BatchEncodingConverter",
-    "description": "convert encoding of files in current workspace.",
-    "version": "1.3.0",
+    "description": "Batch convert file encodings in a workspace: Shift_JIS, EUC-JP, ISO-2022-JP, UTF-8 (with or without BOM) and UTF-16, in any direction.",
+    "version": "1.3.1",
     "publisher": "yuna611d",
+    "license": "MIT",
+    "icon": "images/icon.png",
     "engines": {
         "vscode": "^1.33.0"
     },
     "categories": [
         "Other"
     ],
+    "keywords": [
+        "encoding",
+        "Shift_JIS",
+        "EUC-JP",
+        "ISO-2022-JP",
+        "文字コード"
+    ],
+    "galleryBanner": {
+        "color": "#1E3A5F",
+        "theme": "dark"
+    },
     "activationEvents": [
         "onCommand:extension.convertEncoding"
     ],
     "main": "./out/extension",
+    "extensionKind": [
+        "workspace"
+    ],
+    "capabilities": {
+        "virtualWorkspaces": {
+            "supported": false,
+            "description": "Files are read and written through the file system, which a virtual workspace does not provide."
+        },
+        "untrustedWorkspaces": {
+            "supported": true,
+            "description": "Nothing from the workspace is executed; files are only read, converted and written on an explicit command."
+        }
+    },
     "contributes": {
         "commands": [
             {
@@ -65,5 +91,9 @@
     "repository": {
         "type": "git",
         "url": "https://github.com/yuna611d/BatchEncodingConverter.git"
-    }
+    },
+    "bugs": {
+        "url": "https://github.com/yuna611d/BatchEncodingConverter/issues"
+    },
+    "homepage": "https://github.com/yuna611d/BatchEncodingConverter#readme"
 }
